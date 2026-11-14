@@ -19,6 +19,14 @@
 
 Щёлкни правой кнопкой по значку в трее, чтобы отключить все жесты колёсиком или только жесты «Представления задач».
 
+## Автозапуск при входе в Windows
+
+1. Сохрани `macos controls.exe` в папке, где он будет храниться постоянно.
+2. Нажми **Win+R**, введи `shell:startup` и нажми **Enter**. Откроется папка автозагрузки текущего пользователя.
+3. В открывшейся папке создай ярлык на `macos controls.exe` через **ПКМ → Создать → Ярлык**.
+
+При следующем входе в Windows утилита запустится автоматически. Чтобы отключить автозапуск, удали ярлык из этой папки. [Инструкция Microsoft](https://support.microsoft.com/en-gb/windows/experience/startup-boot/configure-startup-applications-in-windows)
+
 ## Сборка из исходников
 
 Из папки репозитория в PowerShell на 64-битной Windows:
@@ -46,5 +54,13 @@ Hold down the mouse wheel (middle button), move the mouse at least 56 pixels hor
 | Down | Close Task View and return to the previous window |
 
 Right-click the tray icon to pause Alt+Q, toggle all mouse gestures, disable only the Task View gestures, or exit the utility.
+
+### Start automatically at sign-in
+
+1. Save `macos controls.exe` in a folder where you plan to keep it.
+2. Press **Win+R**, type `shell:startup`, and press **Enter** to open the current user's Startup folder.
+3. Right-click inside the folder and select **New → Shortcut**. Point the shortcut to `macos controls.exe`.
+
+The utility will start the next time you sign in to Windows. To disable automatic startup, delete the shortcut from that folder. [Microsoft instructions](https://support.microsoft.com/en-gb/windows/experience/startup-boot/configure-startup-applications-in-windows)
 
 To build from source, run the PowerShell commands above on 64-bit Windows.
