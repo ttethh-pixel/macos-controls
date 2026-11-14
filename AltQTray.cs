@@ -45,15 +45,27 @@ namespace AltQTray
         private readonly Icon trayImage;
         private readonly ContextMenuStrip menu;
         private readonly ToolStripMenuItem toggle;
+        private readonly ToolStripMenuItem gestureToggle;
         private readonly HotkeyWindow hotkey;
+        private readonly DesktopGesture gesture;
 
         internal TrayApplication()
         {
             hotkey = new HotkeyWindow(CloseForegroundApplication);
+            gesture = new DesktopGesture();
             menu = new ContextMenuStrip();
             toggle = new ToolStripMenuItem();
             toggle.Click += (sender, args) => SetActive(!hotkey.Active);
             menu.Items.Add(toggle);
+            gestureToggle = new ToolStripMenuItem();
+            gestureToggle.Click += (sender, args) => SetGestureActive(!gesture.Active);
+            menu.Items.Add(gestureToggle);
+            var taskViewToggle = new ToolStripMenuItem("Отключить жесты представления задач")
+            {
+                CheckOnClick = true
+            };
+            taskViewToggle.CheckedChanged += (sender, args) => gesture.TaskViewEnabled = !taskViewToggle.Checked;
+            menu.Items.Add(taskViewToggle);
             menu.Items.Add("Выход", null, (sender, args) => ExitThread());
             using (Stream image = typeof(TrayApplication).Assembly.GetManifestResourceStream("AltQTray.ico"))
             {
@@ -68,19 +80,31 @@ namespace AltQTray
                 Visible = true
             };
             SetActive(true);
+            SetGestureActive(true);
         }
 
         private void SetActive(bool active)
         {
             int error = hotkey.SetActive(active);
             toggle.Text = hotkey.Active ? "Приостановить Alt+Q" : "Включить Alt+Q";
-            icon.Text = hotkey.Active ? Program.Name + " — Alt+Q" : Program.Name + " — на паузе";
             if (error != 0)
             {
                 string details = error == 1409
                     ? "Сочетание уже занято. Освободите его и выберите «Включить Alt+Q» в трее."
                     : new Win32Exception(error).Message;
                 MessageBox.Show(details, Program.Name, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+
+        private void SetGestureActive(bool active)
+        {
+            int error = gesture.SetActive(active);
+            gestureToggle.Text = "Жесты колёсиком";
+            gestureToggle.Checked = gesture.Active;
+            if (error != 0)
+            {
+                MessageBox.Show("Не удалось включить жест мыши. " + new Win32Exception(error).Message,
+                    Program.Name, MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
         }
 
@@ -99,6 +123,7 @@ namespace AltQTray
         {
             if (disposing)
             {
+                gesture.Dispose();
                 hotkey.Dispose();
                 icon.Visible = false;
                 icon.Dispose();
@@ -107,6 +132,293 @@ namespace AltQTray
             }
             base.Dispose(disposing);
         }
+    }
+
+    internal enum MouseAction
+    {
+        None,
+        MiddleClick,
+        DesktopLeft,
+        DesktopRight,
+        OpenTaskView,
+        CloseTaskView
+    }
+
+    internal sealed class DesktopGesture : NativeWindow, IDisposable
+    {
+        private const int WhMouseLowLevel = 14;
+        private const int WmMiddleDown = 0x0207;
+        private const int WmMiddleUp = 0x0208;
+        private const int WmGesture = 0x8001;
+        private const int SwipeDistance = 56;
+        private const uint InjectedMouseEvent = 1;
+        private const uint ExtendedKey = 0x0001;
+        private const uint KeyUp = 0x0002;
+        private static readonly UIntPtr ClickMarker = new UIntPtr(0x514D4753u);
+        private readonly MouseHookCallback callback;
+        private IntPtr hook;
+        private bool tracking;
+        private Point start;
+
+        internal DesktopGesture()
+        {
+            callback = OnMouseEvent;
+            TaskViewEnabled = true;
+            CreateHandle(new CreateParams { Parent = new IntPtr(-3) }); // HWND_MESSAGE
+        }
+
+        internal bool Active { get; private set; }
+        internal bool TaskViewEnabled { get; set; }
+
+        internal int SetActive(bool active)
+        {
+            if (active && hook == IntPtr.Zero)
+            {
+                hook = SetWindowsHookEx(WhMouseLowLevel, callback, GetModuleHandle(null), 0);
+                if (hook == IntPtr.Zero)
+                    return Marshal.GetLastWin32Error();
+            }
+            Active = active;
+            return 0;
+        }
+
+        private IntPtr OnMouseEvent(int code, IntPtr message, IntPtr data)
+        {
+            int kind = message.ToInt32();
+            if (code < 0 || (!Active && !tracking) || (kind != WmMiddleDown && kind != WmMiddleUp))
+                return CallNextHookEx(hook, code, message, data);
+
+            var mouse = (MouseEvent)Marshal.PtrToStructure(data, typeof(MouseEvent));
+            if ((mouse.Flags & InjectedMouseEvent) != 0 && mouse.ExtraInfo == ClickMarker)
+                return CallNextHookEx(hook, code, message, data);
+
+            if (kind == WmMiddleDown && Active && !ModifiersDown())
+            {
+                if (!tracking)
+                    start = mouse.Position;
+                tracking = true;
+                return new IntPtr(1);
+            }
+
+            if (kind == WmMiddleUp && tracking)
+            {
+                tracking = false;
+                MouseAction action = Classify(start, mouse.Position);
+                if (action == MouseAction.MiddleClick || (Active && action != MouseAction.None))
+                    Native.PostMessage(Handle, WmGesture, new IntPtr((int)action), IntPtr.Zero);
+                return new IntPtr(1);
+            }
+
+            return CallNextHookEx(hook, code, message, data);
+        }
+
+        internal static MouseAction Classify(Point start, Point end)
+        {
+            int dx = end.X - start.X;
+            int dy = end.Y - start.Y;
+            int horizontal = Math.Abs(dx);
+            int vertical = Math.Abs(dy);
+            if (horizontal >= SwipeDistance && horizontal >= 1.5 * vertical)
+                return dx < 0 ? MouseAction.DesktopRight : MouseAction.DesktopLeft;
+            if (vertical >= SwipeDistance && vertical >= 1.5 * horizontal)
+                return dy < 0 ? MouseAction.OpenTaskView : MouseAction.CloseTaskView;
+            if (horizontal <= 12 && vertical <= 12)
+                return MouseAction.MiddleClick;
+            return MouseAction.None;
+        }
+
+        protected override void WndProc(ref Message message)
+        {
+            if (message.Msg == WmGesture)
+            {
+                var action = (MouseAction)message.WParam.ToInt32();
+                if (action != MouseAction.MiddleClick && (!Active || ModifiersDown()))
+                    return;
+
+                switch (action)
+                {
+                    case MouseAction.MiddleClick:
+                        Send(MouseButton(0x0020), MouseButton(0x0040)); // Middle down, middle up.
+                        break;
+                    case MouseAction.DesktopLeft:
+                        SwitchDesktop(Keys.Left);
+                        break;
+                    case MouseAction.DesktopRight:
+                        SwitchDesktop(Keys.Right);
+                        break;
+                    case MouseAction.OpenTaskView:
+                        if (TaskViewEnabled && !TaskViewIsForeground())
+                            Send(Key(Keys.LWin, ExtendedKey), Key(Keys.Tab, 0),
+                                Key(Keys.Tab, KeyUp), Key(Keys.LWin, ExtendedKey | KeyUp));
+                        break;
+                    case MouseAction.CloseTaskView:
+                        if (TaskViewEnabled && TaskViewIsForeground())
+                            Send(Key(Keys.Escape, 0), Key(Keys.Escape, KeyUp));
+                        break;
+                }
+                return;
+            }
+            base.WndProc(ref message);
+        }
+
+        private static void SwitchDesktop(Keys direction)
+        {
+            Send(Key(Keys.LWin, ExtendedKey), Key(Keys.LControlKey, 0), Key(direction, ExtendedKey),
+                Key(direction, ExtendedKey | KeyUp), Key(Keys.LControlKey, KeyUp), Key(Keys.LWin, ExtendedKey | KeyUp));
+        }
+
+        internal static bool TaskViewIsForeground()
+        {
+            IntPtr window = Native.GetForegroundWindow();
+            if (window == IntPtr.Zero)
+                return false;
+
+            // Windows 10 uses a dedicated window class. Newer builds identify the shell thread.
+            if (Native.ClassName(window) == "MultitaskingViewFrame")
+                return true;
+
+            uint process;
+            uint threadId = Native.GetWindowThreadProcessId(window, out process);
+            if (threadId == 0 || process != Native.ProcessId(Native.GetShellWindow()))
+                return false;
+
+            const uint queryLimitedInformation = 0x0800;
+            IntPtr thread = OpenThread(queryLimitedInformation, false, threadId);
+            if (thread == IntPtr.Zero)
+                return false;
+
+            IntPtr description = IntPtr.Zero;
+            try
+            {
+                return GetThreadDescription(thread, out description) >= 0
+                    && Marshal.PtrToStringUni(description) == "MultitaskingView";
+            }
+            catch (EntryPointNotFoundException)
+            {
+                return false;
+            }
+            finally
+            {
+                if (description != IntPtr.Zero)
+                    LocalFree(description);
+                CloseHandle(thread);
+            }
+        }
+
+        private static bool ModifiersDown()
+        {
+            return IsDown(Keys.ShiftKey) || IsDown(Keys.ControlKey) || IsDown(Keys.Menu)
+                || IsDown(Keys.LWin) || IsDown(Keys.RWin);
+        }
+
+        private static bool IsDown(Keys key)
+        {
+            return GetAsyncKeyState((int)key) < 0;
+        }
+
+        private static Input MouseButton(uint flags)
+        {
+            return new Input { Data = new InputData { Mouse = new MouseInput { Flags = flags, ExtraInfo = ClickMarker } } };
+        }
+
+        private static Input Key(Keys key, uint flags)
+        {
+            return new Input { Type = 1, Data = new InputData { Keyboard = new KeyboardInput { Key = (ushort)key, Flags = flags } } };
+        }
+
+        private static void Send(params Input[] inputs)
+        {
+            SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(Input)));
+        }
+
+        public void Dispose()
+        {
+            if (hook != IntPtr.Zero)
+            {
+                UnhookWindowsHookEx(hook);
+                hook = IntPtr.Zero;
+            }
+            if (Handle != IntPtr.Zero)
+                DestroyHandle();
+            Active = false;
+        }
+
+        private delegate IntPtr MouseHookCallback(int code, IntPtr message, IntPtr data);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct MouseEvent
+        {
+            internal Point Position;
+            internal uint MouseData;
+            internal uint Flags;
+            internal uint Time;
+            internal UIntPtr ExtraInfo;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct Input
+        {
+            internal uint Type;
+            internal InputData Data;
+        }
+
+        [StructLayout(LayoutKind.Explicit)]
+        private struct InputData
+        {
+            [FieldOffset(0)] internal MouseInput Mouse;
+            [FieldOffset(0)] internal KeyboardInput Keyboard;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct MouseInput
+        {
+            internal int X;
+            internal int Y;
+            internal uint MouseData;
+            internal uint Flags;
+            internal uint Time;
+            internal UIntPtr ExtraInfo;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct KeyboardInput
+        {
+            internal ushort Key;
+            internal ushort ScanCode;
+            internal uint Flags;
+            internal uint Time;
+            internal UIntPtr ExtraInfo;
+        }
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+        private static extern IntPtr GetModuleHandle(string name);
+
+        [DllImport("kernel32.dll")]
+        private static extern IntPtr OpenThread(uint access, bool inheritHandle, uint threadId);
+
+        [DllImport("kernel32.dll")]
+        private static extern int GetThreadDescription(IntPtr thread, out IntPtr description);
+
+        [DllImport("kernel32.dll")]
+        private static extern IntPtr LocalFree(IntPtr memory);
+
+        [DllImport("kernel32.dll")]
+        private static extern bool CloseHandle(IntPtr handle);
+
+        [DllImport("user32.dll", EntryPoint = "SetWindowsHookExW", SetLastError = true)]
+        private static extern IntPtr SetWindowsHookEx(int kind, MouseHookCallback callback, IntPtr module, uint threadId);
+
+        [DllImport("user32.dll")]
+        private static extern bool UnhookWindowsHookEx(IntPtr hook);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr CallNextHookEx(IntPtr hook, int code, IntPtr message, IntPtr data);
+
+        [DllImport("user32.dll")]
+        private static extern short GetAsyncKeyState(int key);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern uint SendInput(uint count, Input[] inputs, int size);
     }
 
     internal sealed class HotkeyWindow : NativeWindow, IDisposable
@@ -238,7 +550,7 @@ namespace AltQTray
         internal static extern IntPtr GetShellWindow();
 
         [DllImport("user32.dll")]
-        private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+        internal static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
 
         [DllImport("kernel32.dll")]
         internal static extern uint GetCurrentProcessId();
