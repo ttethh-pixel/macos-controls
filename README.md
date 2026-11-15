@@ -14,10 +14,11 @@
 | --- | --- |
 | Влево | Перейти на рабочий стол справа |
 | Вправо | Перейти на рабочий стол слева |
-| Вверх | Открыть «Представление задач» |
-| Вниз | Закрыть «Представление задач» и вернуться к предыдущему окну |
+| Вверх | Открыть «Представление задач». Повтори жест, чтобы вернуться к активному окну |
+| Вниз | Показать рабочий стол. Повтори жест, чтобы восстановить окна. В «Представлении задач» жест возвращает к предыдущему окну |
 
-Щёлкни правой кнопкой по значку в трее, чтобы отключить все жесты колёсиком или только жесты «Представления задач».
+Щёлкни правой кнопкой по значку в трее, чтобы отдельно отключить Alt+Q, жест вверх, жест вниз или переключение столов влево и вправо. Галочка означает, что действие отключено.
+В пункте «Мини-справка» можно посмотреть сочетание клавиш и жесты.
 
 ## Автозапуск при входе в Windows
 
@@ -33,7 +34,7 @@
 
 ```powershell
 $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
-& $csc /nologo /optimize+ /codepage:65001 /target:winexe '/out:macos controls.exe' /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /win32icon:AltQTray.ico /resource:AltQTray.ico,AltQTray.ico AltQTray.cs
+& $csc /nologo /optimize+ /codepage:65001 /target:winexe '/out:macos controls.exe' /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /win32icon:MacosControls.ico /resource:MacosControls.ico,MacosControls.ico MacosControls.cs
 ```
 
 ## English
@@ -50,10 +51,11 @@ Hold down the mouse wheel (middle button), move the mouse at least 56 pixels hor
 | --- | --- |
 | Left | Switch to the desktop on the right |
 | Right | Switch to the desktop on the left |
-| Up | Open Task View to see your open windows and virtual desktops |
-| Down | Close Task View and return to the previous window |
+| Up | Open Task View. Repeat to return to the active window |
+| Down | Show the desktop. Repeat to restore the windows. In Task View, return to the previous window |
 
-Right-click the tray icon to pause Alt+Q, toggle all mouse gestures, disable only the Task View gestures, or exit the utility.
+Right-click the tray icon to disable Alt+Q, the upward gesture, the downward gesture, or horizontal desktop switching independently. A checkmark means the action is disabled.
+The «Мини-справка» (Quick help) submenu lists the controls.
 
 ### Start automatically at sign-in
 

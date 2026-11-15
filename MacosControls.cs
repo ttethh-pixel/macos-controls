@@ -12,7 +12,7 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("macos controls")]
 [assembly: AssemblyProduct("macos controls")]
 
-namespace AltQTray
+namespace MacosControls
 {
     internal static class Program
     {
@@ -22,6 +22,7 @@ namespace AltQTray
         private static void Main()
         {
             bool firstInstance;
+            // Keep the same mutex as the first release so both versions cannot run together.
             using (var instance = new Mutex(true, @"Local\AltQTray.SingleInstance", out firstInstance))
             {
                 if (!firstInstance)
@@ -44,8 +45,10 @@ namespace AltQTray
         private readonly NotifyIcon icon;
         private readonly Icon trayImage;
         private readonly ContextMenuStrip menu;
-        private readonly ToolStripMenuItem toggle;
-        private readonly ToolStripMenuItem gestureToggle;
+        private readonly ToolStripMenuItem hotkeyToggle;
+        private readonly ToolStripMenuItem upToggle;
+        private readonly ToolStripMenuItem downToggle;
+        private readonly ToolStripMenuItem desktopsToggle;
         private readonly HotkeyWindow hotkey;
         private readonly DesktopGesture gesture;
 
@@ -54,20 +57,16 @@ namespace AltQTray
             hotkey = new HotkeyWindow(CloseForegroundApplication);
             gesture = new DesktopGesture();
             menu = new ContextMenuStrip();
-            toggle = new ToolStripMenuItem();
-            toggle.Click += (sender, args) => SetActive(!hotkey.Active);
-            menu.Items.Add(toggle);
-            gestureToggle = new ToolStripMenuItem();
-            gestureToggle.Click += (sender, args) => SetGestureActive(!gesture.Active);
-            menu.Items.Add(gestureToggle);
-            var taskViewToggle = new ToolStripMenuItem("Отключить жесты представления задач")
-            {
-                CheckOnClick = true
-            };
-            taskViewToggle.CheckedChanged += (sender, args) => gesture.TaskViewEnabled = !taskViewToggle.Checked;
-            menu.Items.Add(taskViewToggle);
+            hotkeyToggle = new ToolStripMenuItem("Откл. Alt+Q") { CheckOnClick = true };
+            hotkeyToggle.Click += (sender, args) => SetHotkeyActive(!hotkeyToggle.Checked);
+            menu.Items.Add(hotkeyToggle);
+            upToggle = AddGestureToggle("Откл. жест вверх");
+            downToggle = AddGestureToggle("Откл. жест вниз");
+            desktopsToggle = AddGestureToggle("Откл. переключение столов");
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add(CreateHelpMenu());
             menu.Items.Add("Выход", null, (sender, args) => ExitThread());
-            using (Stream image = typeof(TrayApplication).Assembly.GetManifestResourceStream("AltQTray.ico"))
+            using (Stream image = typeof(TrayApplication).Assembly.GetManifestResourceStream("MacosControls.ico"))
             {
                 trayImage = image == null ? (Icon)SystemIcons.Application.Clone()
                     : new Icon(image, SystemInformation.SmallIconSize);
@@ -79,30 +78,59 @@ namespace AltQTray
                 Text = Program.Name,
                 Visible = true
             };
-            SetActive(true);
-            SetGestureActive(true);
+            SetHotkeyActive(true);
+            UpdateGestures();
         }
 
-        private void SetActive(bool active)
+        internal const string HelpText =
+            "Закрытие окна — Alt+Q.\n\n" +
+            "Переключение рабочих столов — жесты вправо и влево с зажатым колёсиком.\n\n" +
+            "Представление задач — жест вверх с зажатым колёсиком. Повтори жест для выхода.\n\n" +
+            "Показать рабочий стол — жест вниз с зажатым колёсиком. Повтори жест, чтобы вернуть окна. В «Представлении задач» жест вниз возвращает к предыдущему окну.";
+
+        internal static ToolStripMenuItem CreateHelpMenu()
+        {
+            return new ToolStripMenuItem("Мини-справка", null, (sender, args) =>
+                MessageBox.Show(HelpText, "Мини-справка — macos controls", MessageBoxButtons.OK));
+        }
+
+        private ToolStripMenuItem AddGestureToggle(string label)
+        {
+            var toggle = new ToolStripMenuItem(label) { CheckOnClick = true };
+            toggle.Click += (sender, args) => UpdateGestures();
+            menu.Items.Add(toggle);
+            return toggle;
+        }
+
+        private void SetHotkeyActive(bool active)
         {
             int error = hotkey.SetActive(active);
-            toggle.Text = hotkey.Active ? "Приостановить Alt+Q" : "Включить Alt+Q";
+            hotkeyToggle.Checked = !hotkey.Active;
             if (error != 0)
             {
                 string details = error == 1409
-                    ? "Сочетание уже занято. Освободите его и выберите «Включить Alt+Q» в трее."
+                    ? "Сочетание уже занято. Освободите его и снимите галочку «Откл. Alt+Q» в трее."
                     : new Win32Exception(error).Message;
                 MessageBox.Show(details, Program.Name, MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
         }
 
-        private void SetGestureActive(bool active)
+        private void UpdateGestures()
         {
-            int error = gesture.SetActive(active);
-            gestureToggle.Text = "Жесты колёсиком";
-            gestureToggle.Checked = gesture.Active;
+            MouseAction actions = MouseAction.None;
+            if (!upToggle.Checked)
+                actions |= MouseAction.ToggleTaskView;
+            if (!downToggle.Checked)
+                actions |= MouseAction.ToggleDesktop;
+            if (!desktopsToggle.Checked)
+                actions |= MouseAction.DesktopLeft | MouseAction.DesktopRight;
+
+            int error = gesture.SetEnabledActions(actions);
             if (error != 0)
             {
+                upToggle.Checked = true;
+                downToggle.Checked = true;
+                desktopsToggle.Checked = true;
                 MessageBox.Show("Не удалось включить жест мыши. " + new Win32Exception(error).Message,
                     Program.Name, MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
@@ -134,14 +162,15 @@ namespace AltQTray
         }
     }
 
+    [Flags]
     internal enum MouseAction
     {
-        None,
-        MiddleClick,
-        DesktopLeft,
-        DesktopRight,
-        OpenTaskView,
-        CloseTaskView
+        None = 0,
+        MiddleClick = 1,
+        DesktopLeft = 2,
+        DesktopRight = 4,
+        ToggleTaskView = 8,
+        ToggleDesktop = 16
     }
 
     internal sealed class DesktopGesture : NativeWindow, IDisposable
@@ -157,42 +186,45 @@ namespace AltQTray
         private static readonly UIntPtr ClickMarker = new UIntPtr(0x514D4753u);
         private readonly MouseHookCallback callback;
         private IntPtr hook;
+        private MouseAction enabledActions;
         private bool tracking;
         private Point start;
 
         internal DesktopGesture()
         {
             callback = OnMouseEvent;
-            TaskViewEnabled = true;
             CreateHandle(new CreateParams { Parent = new IntPtr(-3) }); // HWND_MESSAGE
         }
 
-        internal bool Active { get; private set; }
-        internal bool TaskViewEnabled { get; set; }
-
-        internal int SetActive(bool active)
+        internal int SetEnabledActions(MouseAction actions)
         {
-            if (active && hook == IntPtr.Zero)
+            if (actions != MouseAction.None && hook == IntPtr.Zero)
             {
                 hook = SetWindowsHookEx(WhMouseLowLevel, callback, GetModuleHandle(null), 0);
                 if (hook == IntPtr.Zero)
                     return Marshal.GetLastWin32Error();
             }
-            Active = active;
+            enabledActions = actions;
             return 0;
+        }
+
+        internal bool IsEnabled(MouseAction action)
+        {
+            return (enabledActions & action) != MouseAction.None;
         }
 
         private IntPtr OnMouseEvent(int code, IntPtr message, IntPtr data)
         {
             int kind = message.ToInt32();
-            if (code < 0 || (!Active && !tracking) || (kind != WmMiddleDown && kind != WmMiddleUp))
+            bool active = enabledActions != MouseAction.None;
+            if (code < 0 || (!active && !tracking) || (kind != WmMiddleDown && kind != WmMiddleUp))
                 return CallNextHookEx(hook, code, message, data);
 
             var mouse = (MouseEvent)Marshal.PtrToStructure(data, typeof(MouseEvent));
             if ((mouse.Flags & InjectedMouseEvent) != 0 && mouse.ExtraInfo == ClickMarker)
                 return CallNextHookEx(hook, code, message, data);
 
-            if (kind == WmMiddleDown && Active && !ModifiersDown())
+            if (kind == WmMiddleDown && active && !ModifiersDown())
             {
                 if (!tracking)
                     start = mouse.Position;
@@ -204,7 +236,7 @@ namespace AltQTray
             {
                 tracking = false;
                 MouseAction action = Classify(start, mouse.Position);
-                if (action == MouseAction.MiddleClick || (Active && action != MouseAction.None))
+                if (action == MouseAction.MiddleClick || IsEnabled(action))
                     Native.PostMessage(Handle, WmGesture, new IntPtr((int)action), IntPtr.Zero);
                 return new IntPtr(1);
             }
@@ -221,7 +253,7 @@ namespace AltQTray
             if (horizontal >= SwipeDistance && horizontal >= 1.5 * vertical)
                 return dx < 0 ? MouseAction.DesktopRight : MouseAction.DesktopLeft;
             if (vertical >= SwipeDistance && vertical >= 1.5 * horizontal)
-                return dy < 0 ? MouseAction.OpenTaskView : MouseAction.CloseTaskView;
+                return dy < 0 ? MouseAction.ToggleTaskView : MouseAction.ToggleDesktop;
             if (horizontal <= 12 && vertical <= 12)
                 return MouseAction.MiddleClick;
             return MouseAction.None;
@@ -232,7 +264,7 @@ namespace AltQTray
             if (message.Msg == WmGesture)
             {
                 var action = (MouseAction)message.WParam.ToInt32();
-                if (action != MouseAction.MiddleClick && (!Active || ModifiersDown()))
+                if (action != MouseAction.MiddleClick && (!IsEnabled(action) || ModifiersDown()))
                     return;
 
                 switch (action)
@@ -246,14 +278,11 @@ namespace AltQTray
                     case MouseAction.DesktopRight:
                         SwitchDesktop(Keys.Right);
                         break;
-                    case MouseAction.OpenTaskView:
-                        if (TaskViewEnabled && !TaskViewIsForeground())
-                            Send(Key(Keys.LWin, ExtendedKey), Key(Keys.Tab, 0),
-                                Key(Keys.Tab, KeyUp), Key(Keys.LWin, ExtendedKey | KeyUp));
+                    case MouseAction.ToggleTaskView:
+                        SendWindowsShortcut(Keys.Tab);
                         break;
-                    case MouseAction.CloseTaskView:
-                        if (TaskViewEnabled && TaskViewIsForeground())
-                            Send(Key(Keys.Escape, 0), Key(Keys.Escape, KeyUp));
+                    case MouseAction.ToggleDesktop:
+                        SendWindowsShortcut(TaskViewIsForeground() ? Keys.Tab : Keys.D);
                         break;
                 }
                 return;
@@ -267,42 +296,28 @@ namespace AltQTray
                 Key(direction, ExtendedKey | KeyUp), Key(Keys.LControlKey, KeyUp), Key(Keys.LWin, ExtendedKey | KeyUp));
         }
 
-        internal static bool TaskViewIsForeground()
+        private static void SendWindowsShortcut(Keys key)
         {
-            IntPtr window = Native.GetForegroundWindow();
-            if (window == IntPtr.Zero)
-                return false;
+            Send(Key(Keys.LWin, ExtendedKey), Key(key, 0),
+                Key(key, KeyUp), Key(Keys.LWin, ExtendedKey | KeyUp));
+        }
 
-            // Windows 10 uses a dedicated window class. Newer builds identify the shell thread.
-            if (Native.ClassName(window) == "MultitaskingViewFrame")
-                return true;
+        private static bool TaskViewIsForeground()
+        {
+            IntPtr foreground = Native.GetForegroundWindow();
+            uint shell = Native.ProcessId(Native.GetShellWindow());
+            return foreground != IntPtr.Zero && IsTaskViewWindow(
+                shell != 0 && Native.ProcessId(foreground) == shell,
+                Native.ClassName(foreground), Native.WindowTitle(foreground));
+        }
 
-            uint process;
-            uint threadId = Native.GetWindowThreadProcessId(window, out process);
-            if (threadId == 0 || process != Native.ProcessId(Native.GetShellWindow()))
-                return false;
-
-            const uint queryLimitedInformation = 0x0800;
-            IntPtr thread = OpenThread(queryLimitedInformation, false, threadId);
-            if (thread == IntPtr.Zero)
-                return false;
-
-            IntPtr description = IntPtr.Zero;
-            try
-            {
-                return GetThreadDescription(thread, out description) >= 0
-                    && Marshal.PtrToStringUni(description) == "MultitaskingView";
-            }
-            catch (EntryPointNotFoundException)
-            {
-                return false;
-            }
-            finally
-            {
-                if (description != IntPtr.Zero)
-                    LocalFree(description);
-                CloseHandle(thread);
-            }
+        internal static bool IsTaskViewWindow(bool belongsToShell, string windowClass, string title)
+        {
+            return windowClass == "MultitaskingViewFrame"
+                || (belongsToShell && (windowClass == "Windows.UI.Core.CoreWindow"
+                    || windowClass == "ForegroundStaging"
+                    || (windowClass == "XamlExplorerHostIslandWindow"
+                        && (title == "Task View" || title == "Представление задач"))));
         }
 
         private static bool ModifiersDown()
@@ -340,7 +355,7 @@ namespace AltQTray
             }
             if (Handle != IntPtr.Zero)
                 DestroyHandle();
-            Active = false;
+            enabledActions = MouseAction.None;
         }
 
         private delegate IntPtr MouseHookCallback(int code, IntPtr message, IntPtr data);
@@ -392,18 +407,6 @@ namespace AltQTray
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
         private static extern IntPtr GetModuleHandle(string name);
-
-        [DllImport("kernel32.dll")]
-        private static extern IntPtr OpenThread(uint access, bool inheritHandle, uint threadId);
-
-        [DllImport("kernel32.dll")]
-        private static extern int GetThreadDescription(IntPtr thread, out IntPtr description);
-
-        [DllImport("kernel32.dll")]
-        private static extern IntPtr LocalFree(IntPtr memory);
-
-        [DllImport("kernel32.dll")]
-        private static extern bool CloseHandle(IntPtr handle);
 
         [DllImport("user32.dll", EntryPoint = "SetWindowsHookExW", SetLastError = true)]
         private static extern IntPtr SetWindowsHookEx(int kind, MouseHookCallback callback, IntPtr module, uint threadId);
@@ -550,7 +553,7 @@ namespace AltQTray
         internal static extern IntPtr GetShellWindow();
 
         [DllImport("user32.dll")]
-        internal static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+        private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
 
         [DllImport("kernel32.dll")]
         internal static extern uint GetCurrentProcessId();
@@ -572,6 +575,16 @@ namespace AltQTray
 
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
         private static extern int GetClassName(IntPtr window, StringBuilder name, int maxLength);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern int GetWindowText(IntPtr window, StringBuilder text, int maxLength);
+
+        internal static string WindowTitle(IntPtr window)
+        {
+            var title = new StringBuilder(128);
+            GetWindowText(window, title, title.Capacity);
+            return title.ToString();
+        }
 
         [DllImport("user32.dll", EntryPoint = "PostMessageW", SetLastError = true)]
         internal static extern bool PostMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam);
