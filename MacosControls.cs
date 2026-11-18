@@ -64,6 +64,11 @@ namespace MacosControls
             downToggle = AddGestureToggle("Откл. жест вниз");
             desktopsToggle = AddGestureToggle("Откл. переключение столов");
             menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("Настройки…", null, (sender, args) =>
+            {
+                using (var settings = new ActivationSettings(gesture))
+                    settings.ShowDialog();
+            });
             menu.Items.Add(CreateHelpMenu());
             menu.Items.Add("Выход", null, (sender, args) => ExitThread());
             using (Stream image = typeof(TrayApplication).Assembly.GetManifestResourceStream("MacosControls.ico"))
@@ -162,6 +167,74 @@ namespace MacosControls
         }
     }
 
+    internal sealed class ActivationSettings : Form
+    {
+        private readonly DesktopGesture gesture;
+        private readonly Label status;
+        private HashSet<int> selected;
+
+        internal ActivationSettings(DesktopGesture gesture)
+        {
+            this.gesture = gesture;
+            selected = new HashSet<int>(gesture.ActivationButtons);
+            Text = "Настройки — macos controls";
+            ClientSize = new Size(540, 260);
+            AutoScaleMode = AutoScaleMode.Dpi;
+            Font = new Font("Segoe UI", 10);
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false;
+            MinimizeBox = false;
+            StartPosition = FormStartPosition.CenterScreen;
+            var description = new Label { Text = "Сочетание активации жестов\nНажми «Записать», зажми клавиши и/или кнопки мыши одновременно и отпусти.", Location = new Point(20, 18), Size = new Size(500, 70) };
+            status = new Label { Text = ButtonNames(selected), Location = new Point(20, 100), Size = new Size(500, 45) };
+            var record = new Button { Text = "Записать", Location = new Point(20, 160), Size = new Size(130, 35) };
+            record.Click += (sender, args) => { status.Text = "Ожидаю сочетание…"; gesture.Recording = true; };
+            var reset = new Button { Text = "Колёсико", Location = new Point(165, 160), Size = new Size(130, 35) };
+            reset.Click += (sender, args) => { gesture.Recording = false; selected = new HashSet<int> { 4 }; status.Text = ButtonNames(selected); };
+            var save = new Button { Text = "Сохранить", Location = new Point(310, 160), Size = new Size(130, 35) };
+            save.Click += (sender, args) =>
+            {
+                try { gesture.SaveActivation(selected); Close(); }
+                catch (IOException error) { MessageBox.Show(error.Message, Text); }
+                catch (UnauthorizedAccessException error) { MessageBox.Show(error.Message, Text); }
+            };
+            Controls.AddRange(new Control[] { description, status, record, reset, save });
+            gesture.ButtonsRecorded += OnRecorded;
+        }
+
+        private void OnRecorded(HashSet<int> buttons)
+        {
+            BeginInvoke((Action)(() =>
+            {
+                selected = buttons;
+                status.Text = ButtonNames(buttons);
+            }));
+        }
+
+        private static string ButtonNames(HashSet<int> buttons)
+        {
+            var names = new List<string>();
+            string[] labels = { "Левая", "Правая", "Колёсико", "Дополнительная 1", "Дополнительная 2" };
+            for (int i = 0; i < labels.Length; i++)
+                if (buttons.Contains(1 << i))
+                    names.Add(labels[i]);
+            foreach (int button in buttons)
+                if (button >= 256)
+                    names.Add(((Keys)(button - 256)).ToString());
+            return string.Join(" + ", names.ToArray());
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                gesture.Recording = false;
+                gesture.ButtonsRecorded -= OnRecorded;
+            }
+            base.Dispose(disposing);
+        }
+    }
+
     [Flags]
     internal enum MouseAction
     {
@@ -176,8 +249,6 @@ namespace MacosControls
     internal sealed class DesktopGesture : NativeWindow, IDisposable
     {
         private const int WhMouseLowLevel = 14;
-        private const int WmMiddleDown = 0x0207;
-        private const int WmMiddleUp = 0x0208;
         private const int WmGesture = 0x8001;
         private const int SwipeDistance = 56;
         private const uint InjectedMouseEvent = 1;
@@ -185,15 +256,70 @@ namespace MacosControls
         private const uint KeyUp = 0x0002;
         private static readonly UIntPtr ClickMarker = new UIntPtr(0x514D4753u);
         private readonly MouseHookCallback callback;
+        private readonly MouseHookCallback keyboardCallback;
+        private IntPtr keyboardHook;
         private IntPtr hook;
         private MouseAction enabledActions;
         private bool tracking;
         private Point start;
+        private readonly HashSet<int> pressed = new HashSet<int>();
+        private readonly HashSet<int> captured = new HashSet<int>();
+        private readonly List<Input> pending = new List<Input>();
+        internal HashSet<int> ActivationButtons { get; set; }
+        internal bool Recording { get; set; }
+        internal event Action<HashSet<int>> ButtonsRecorded;
+        private static readonly string SettingsPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MacosControls", "activation.txt");
+
+        internal void SaveActivation(HashSet<int> buttons)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath));
+            string temporary = SettingsPath + ".tmp";
+            File.WriteAllText(temporary, "v2:" + string.Join(",", buttons));
+            if (File.Exists(SettingsPath))
+                File.Replace(temporary, SettingsPath, null);
+            else
+                File.Move(temporary, SettingsPath);
+            ActivationButtons = new HashSet<int>(buttons);
+        }
 
         internal DesktopGesture()
         {
             callback = OnMouseEvent;
+            keyboardCallback = OnKeyboardEvent;
+            ActivationButtons = new HashSet<int> { 4 };
+            try
+            {
+                if (File.Exists(SettingsPath))
+                {
+                    string saved = File.ReadAllText(SettingsPath);
+                    var parsed = new HashSet<int>();
+                    if (saved.StartsWith("v2:"))
+                    {
+                        foreach (string token in saved.Substring(3).Split(','))
+                        {
+                            int value;
+                            if (!int.TryParse(token, out value) || !(value == 1 || value == 2 || value == 4 || value == 8 || value == 16 || (value > 256 && value < 511)))
+                                throw new IOException("Invalid activation setting");
+                            parsed.Add(value);
+                        }
+                    }
+                    else
+                    {
+                        int mask;
+                        if (int.TryParse(saved, out mask))
+                            foreach (int button in new[] { 1, 2, 4, 8, 16 })
+                                if ((mask & button) != 0) parsed.Add(button);
+                    }
+                    if (parsed.Count != 0) ActivationButtons = parsed;
+                }
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
             CreateHandle(new CreateParams { Parent = new IntPtr(-3) }); // HWND_MESSAGE
+            keyboardHook = SetWindowsHookEx(13, keyboardCallback, GetModuleHandle(null), 0);
+            if (keyboardHook == IntPtr.Zero)
+                throw new Win32Exception(Marshal.GetLastWin32Error());
         }
 
         internal int SetEnabledActions(MouseAction actions)
@@ -213,35 +339,112 @@ namespace MacosControls
             return (enabledActions & action) != MouseAction.None;
         }
 
+        internal static int CountButtons(int buttons)
+        {
+            int count = 0;
+            for (; buttons != 0; buttons &= buttons - 1)
+                count++;
+            return count;
+        }
+
+        internal static int DecodeButton(int message, uint data, out bool down)
+        {
+            down = message == 0x201 || message == 0x204 || message == 0x207 || message == 0x20B;
+            switch (message)
+            {
+                case 0x201: case 0x202: return 1;
+                case 0x204: case 0x205: return 2;
+                case 0x207: case 0x208: return 4;
+                case 0x20B: case 0x20C: return (data >> 16) == 1 ? 8 : 16;
+                default: return 0;
+            }
+        }
+
+        private static Input ButtonInput(int button, bool down)
+        {
+            uint flag = button == 1 ? 0x2u : button == 2 ? 0x8u : button == 4 ? 0x20u : 0x80u;
+            Input input = MouseButton(down ? flag : flag * 2);
+            input.Data.Mouse.MouseData = button == 8 ? 1u : button == 16 ? 2u : 0u;
+            return input;
+        }
+
         private IntPtr OnMouseEvent(int code, IntPtr message, IntPtr data)
         {
             int kind = message.ToInt32();
-            bool active = enabledActions != MouseAction.None;
-            if (code < 0 || (!active && !tracking) || (kind != WmMiddleDown && kind != WmMiddleUp))
+            if (code < 0)
                 return CallNextHookEx(hook, code, message, data);
 
             var mouse = (MouseEvent)Marshal.PtrToStructure(data, typeof(MouseEvent));
             if ((mouse.Flags & InjectedMouseEvent) != 0 && mouse.ExtraInfo == ClickMarker)
                 return CallNextHookEx(hook, code, message, data);
 
-            if (kind == WmMiddleDown && active && !ModifiersDown())
+            bool down;
+            int button = DecodeButton(kind, mouse.MouseData, out down);
+            if (button == 0)
+                return CallNextHookEx(hook, code, message, data);
+
+            return ProcessActivation(button, down, mouse.Position, ButtonInput(button, down))
+                ? new IntPtr(1) : CallNextHookEx(hook, code, message, data);
+        }
+
+        private IntPtr OnKeyboardEvent(int code, IntPtr message, IntPtr data)
+        {
+            if (code < 0)
+                return CallNextHookEx(keyboardHook, code, message, data);
+            var key = (KeyboardEvent)Marshal.PtrToStructure(data, typeof(KeyboardEvent));
+            if ((key.Flags & 0x10) != 0)
+                return CallNextHookEx(keyboardHook, code, message, data);
+            bool down = message.ToInt32() == 0x100 || message.ToInt32() == 0x104;
+            Point cursor;
+            GetCursorPos(out cursor);
+            Input input = Key((Keys)key.Key, (key.Flags & 1) | (down ? 0u : KeyUp));
+            return ProcessActivation(256 + (int)key.Key, down, cursor, input)
+                ? new IntPtr(1) : CallNextHookEx(keyboardHook, code, message, data);
+        }
+
+        private bool ProcessActivation(int button, bool down, Point position, Input input)
+        {
+            if (Recording)
             {
-                if (!tracking)
-                    start = mouse.Position;
+                if (down) pressed.Add(button); else pressed.Remove(button);
+                if (down)
+                    captured.Add(button);
+                if (pressed.Count == 0 && captured.Count != 0)
+                {
+                    var result = new HashSet<int>(captured);
+                    captured.Clear();
+                    Recording = false;
+                    if (ButtonsRecorded != null)
+                        ButtonsRecorded(result);
+                }
+                return true;
+            }
+
+            if (!ActivationButtons.Contains(button) || (enabledActions == MouseAction.None && pending.Count == 0))
+                return false;
+            if (!down && !pressed.Contains(button))
+                return false;
+            if (down && pressed.Contains(button))
+                return true;
+
+            pending.Add(input);
+            if (down) pressed.Add(button); else pressed.Remove(button);
+            if (down && pressed.SetEquals(ActivationButtons) && !tracking)
+            {
                 tracking = true;
-                return new IntPtr(1);
+                start = position;
             }
-
-            if (kind == WmMiddleUp && tracking)
+            if (pressed.Count == 0)
             {
+                MouseAction action = tracking ? Classify(start, position) : MouseAction.MiddleClick;
                 tracking = false;
-                MouseAction action = Classify(start, mouse.Position);
-                if (action == MouseAction.MiddleClick || IsEnabled(action))
+                if (action == MouseAction.MiddleClick)
+                    Send(pending.ToArray());
+                else if (IsEnabled(action))
                     Native.PostMessage(Handle, WmGesture, new IntPtr((int)action), IntPtr.Zero);
-                return new IntPtr(1);
+                pending.Clear();
             }
-
-            return CallNextHookEx(hook, code, message, data);
+            return true;
         }
 
         internal static MouseAction Classify(Point start, Point end)
@@ -348,6 +551,13 @@ namespace MacosControls
 
         public void Dispose()
         {
+            if (pending.Count > 0)
+                Send(pending.ToArray());
+            if (keyboardHook != IntPtr.Zero)
+            {
+                UnhookWindowsHookEx(keyboardHook);
+                keyboardHook = IntPtr.Zero;
+            }
             if (hook != IntPtr.Zero)
             {
                 UnhookWindowsHookEx(hook);
@@ -359,6 +569,16 @@ namespace MacosControls
         }
 
         private delegate IntPtr MouseHookCallback(int code, IntPtr message, IntPtr data);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct KeyboardEvent
+        {
+            internal uint Key, ScanCode, Flags, Time;
+            internal UIntPtr ExtraInfo;
+        }
+
+        [DllImport("user32.dll")]
+        private static extern bool GetCursorPos(out Point position);
 
         [StructLayout(LayoutKind.Sequential)]
         private struct MouseEvent

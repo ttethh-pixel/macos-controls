@@ -20,6 +20,8 @@
 Щёлкни правой кнопкой по значку в трее, чтобы отдельно отключить Alt+Q, жест вверх, жест вниз или переключение столов влево и вправо. Галочка означает, что действие отключено.
 В пункте «Мини-справка» можно посмотреть сочетание клавиш и жесты.
 
+В меню трея открой «Настройки…», нажми «Записать», зажми нужные клавиши и/или кнопки мыши одновременно, затем отпусти и сохрани. Для выполнения жеста удерживай назначенное сочетание и двигай мышью. Поддерживаются клавиши клавиатуры, левая и правая кнопки мыши, колёсико и две стандартные боковые кнопки. По умолчанию используется колёсико. Выбор сохраняется между запусками, включая настройки из предыдущей версии.
+
 ## Автозапуск при входе в Windows
 
 1. Сохрани `macos controls.exe` в папке, где он будет храниться постоянно.
@@ -56,6 +58,8 @@ Hold down the mouse wheel (middle button), move the mouse at least 56 pixels hor
 
 Right-click the tray icon to disable Alt+Q, the upward gesture, the downward gesture, or horizontal desktop switching independently. A checkmark means the action is disabled.
 The «Мини-справка» (Quick help) submenu lists the controls.
+
+Open «Настройки…» (Settings) from the tray menu, click «Записать» (Record), hold your chosen keys and/or mouse buttons together, then release and save. Hold the assigned combination while moving the mouse to perform a gesture. Keyboard keys, left and right mouse buttons, the middle button, and two standard side buttons are supported. The default is the middle mouse button. Your selection persists across restarts, including bindings saved by the previous version.
 
 ### Start automatically at sign-in
 
