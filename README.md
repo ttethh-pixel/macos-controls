@@ -4,7 +4,7 @@
 
 Портативная утилита для Windows 10 и 11. Сочетание **Alt+Q** запрашивает штатное закрытие всех окон процесса активной программы. Программа может показать диалог сохранения или остаться в трее, если закрытие окон у неё настроено таким образом.
 
-[Скачать macos controls.exe](./macos%20controls.exe?raw=true) и запустить. Через значок программы в трее можно приостановить Alt+Q или выйти из утилиты. Если Alt+Q уже переназначено в PowerToys или AutoHotkey, освободи сочетание перед запуском.
+[Скачать macos controls.exe](https://github.com/ttethh-pixel/macos-controls/releases/latest/download/macos-controls.exe) и запустить. Через значок программы в трее можно приостановить Alt+Q или выйти из утилиты. Если Alt+Q уже переназначено в PowerToys или AutoHotkey, освободи сочетание перед запуском.
 
 ## Жесты колёсиком
 
@@ -41,7 +41,7 @@ $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 
 ## English
 
-**macos controls** is a portable utility for Windows 10 and 11 that brings macOS-style app closing and virtual desktop gestures to Windows. [Download and run macos controls.exe](./macos%20controls.exe?raw=true).
+**macos controls** is a portable utility for Windows 10 and 11 that brings macOS-style app closing and virtual desktop gestures to Windows. [Download and run macos controls.exe](https://github.com/ttethh-pixel/macos-controls/releases/latest/download/macos-controls.exe).
 
 Press **Alt+Q** to request a normal close for all windows owned by the active app’s process. Apps can still prompt you to save changes or keep running in the system tray. If PowerToys or AutoHotkey already uses Alt+Q, remove the conflicting binding before launching the utility.
 
